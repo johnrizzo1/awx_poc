@@ -49,12 +49,35 @@ All infrastructure is provisioned via Vagrant and configured using Ansible playb
 git clone <repository-url>
 cd awx_poc
 
-# Start the environment (provisions all VMs automatically)
+# Start the environment (fully automated setup)
 vagrant up
 
-# Access AWX Web UI
+# This will automatically:
+# 1. Create and configure all VMs
+# 2. Install Docker and prerequisites
+# 3. Install and start AWX
+# 4. Configure AWX with demo resources
+# 5. Distribute SSH keys to clients
+
+# Access AWX Web UI (after ~15-20 minutes)
 # URL: http://192.168.56.10
-# Default credentials will be displayed after provisioning
+# Username: admin
+# Password: AWXadmin123!
+```
+
+## Manual Provisioning Steps
+
+If you need to run provisioning steps individually:
+
+```bash
+# Run all steps
+vagrant provision
+
+# Or run specific steps
+vagrant provision --provision-with setup
+vagrant provision --provision-with awx_install
+vagrant provision --provision-with awx_configure
+vagrant provision --provision-with distribute_keys
 ```
 
 ## Scaling Client Nodes

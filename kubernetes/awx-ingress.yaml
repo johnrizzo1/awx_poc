@@ -1,0 +1,63 @@
+---
+# AWX Ingress Resource
+# This creates an Ingress to expose the AWX service externally
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: awx-ingress
+  namespace: awx  # Change this to match your AWX namespace
+  annotations:
+    # For NGINX Ingress Controller
+    # nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    # nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    
+    # For Traefik Ingress Controller (uncomment if using Traefik)
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    
+    # Increase timeout for long-running jobs
+    # nginx.ingress.kubernetes.io/proxy-connect-timeout: "600"
+    # nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+spec:
+  ingressClassName: traefik  # Change to 'traefik' if using Traefik
+  rules:
+  - host: awx.local  # Change this to your desired hostname
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: awx-service  # Change this to match your AWX service name
+            port:
+              number: 80  # Change if your service uses a different port
+
+---
+# Optional: Ingress with TLS/HTTPS
+# Uncomment this section if you want to use TLS
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: awx-ingress-tls
+#   namespace: default
+#   annotations:
+#     nginx.ingress.kubernetes.io/ssl-redirect: "true"
+#     nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+#     cert-manager.io/cluster-issuer: "letsencrypt-prod"  # If using cert-manager
+# spec:
+#   ingressClassName: nginx
+#   tls:
+#   - hosts:
+#     - awx.example.com
+#     secretName: awx-tls-secret
+#   rules:
+#   - host: awx.example.com
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: awx-service
+#             port:
+#               number: 80

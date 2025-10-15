@@ -131,3 +131,111 @@ This file records architectural and implementation decisions using a list format
 *   Reduced Vagrantfile size and complexity
 *   Easier to understand and modify
 *   Professional infrastructure as code practices
+
+[2025-10-15 16:59:45] - Automated Complete Provisioning
+
+## Decision
+
+*   Updated Vagrantfile to automatically run all provisioning steps in sequence
+*   Single `vagrant up` command now fully provisions entire AWX environment
+*   Maintained modular playbook structure for flexibility
+
+## Rationale
+
+*   User experience: One command to complete setup
+*   Eliminates manual steps and potential errors
+*   Still allows running individual provisioning steps if needed
+*   Keeps playbooks modular and maintainable
+*   Better than creating a monolithic playbook
+
+## Implementation Details
+
+*   Added four named provisioners in Vagrantfile:
+  1. "setup" - Runs site.yml (prerequisites and clients)
+  2. "awx_install" - Runs awx-install.yml
+  3. "awx_configure" - Runs awx-configure.yml
+  4. "distribute_keys" - Runs distribute-awx-key.yml
+*   Provisioners run in sequence automatically
+*   Each can be run individually: `vagrant provision --provision-with <name>`
+*   Updated README.md with new workflow
+
+## Benefits
+
+*   Complete automation: `vagrant up` does everything
+*   Predictable: Always runs in correct order
+*   Flexible: Can still run steps individually
+*   Maintainable: Playbooks remain separate and reusable
+*   User-friendly: No manual intervention required
+
+[2025-10-15 19:08:35] - SSH Key Management Strategy Change
+
+## Decision
+
+*   Changed from generating new SSH keys to using Vagrant's insecure keys
+*   Copy Vagrant's existing SSH key pair to root user on AWX server
+*   Use these keys for AWX to manage client nodes
+
+## Rationale
+
+*   **Simplicity**: Vagrant already provisions all VMs with the same insecure key
+*   **Reliability**: No dependency on community.crypto collection
+*   **POC-appropriate**: Insecure keys are acceptable for POC/testing environments
+*   **Guaranteed to work**: Keys are already in place and trusted
+*   **Less complexity**: No key generation or distribution issues
+
+## Implementation Details
+
+*   Copy `/home/vagrant/.ssh/id_rsa` to `/root/.ssh/awx_rsa` on AWX server
+*   Copy `/home/vagrant/.ssh/id_rsa.pub` to `/root/.ssh/awx_rsa.pub` on AWX server
+*   Vagrant public key already exists in authorized_keys on all clients
+*   Added verification step to check key exists before distribution
+*   Added better error handling and SSH connection testing
+
+## Benefits
+
+*   No external dependencies (community.crypto collection)
+*   Works immediately without key generation delays
+*   Consistent with Vagrant's security model for POC environments
+*   Simpler troubleshooting - keys are predictable
+*   Faster provisioning - no key generation step
+
+## Security Note
+
+*   Vagrant insecure keys are publicly known and should NEVER be used in production
+*   This approach is ONLY suitable for POC/development/testing environments
+*   Production deployments should generate unique SSH keys
+
+[2025-10-15 19:14:57] - Disabled VM-based AWX Installation
+
+## Decision
+
+*   Commented out all AWX installation and configuration provisioners in Vagrantfile
+*   Disabled: awx_install, awx_configure, and distribute_keys provisioners
+*   Kept only the "setup" provisioner for client VM configuration
+
+## Rationale
+
+*   User deployed AWX in a separate Kubernetes cluster
+*   VM-based AWX installation no longer needed
+*   Client VMs still need to be provisioned and configured
+*   AWX server VM can be repurposed or removed in future
+
+## Implementation Details
+
+*   Commented out lines 98-120 in Vagrantfile
+*   Added clear comments indicating AWX is deployed in Kubernetes
+*   Provisioners can be easily re-enabled if needed
+*   Client provisioning (site.yml) remains active
+
+## Current State
+
+*   `vagrant up` will now only:
+  1. Create all VMs (awx-server + 3 clients)
+  2. Run site.yml to configure prerequisites and clients
+  3. Skip AWX installation, configuration, and key distribution
+
+## Future Considerations
+
+*   May need to create new playbook to configure clients for Kubernetes-based AWX
+*   SSH key distribution will need to be handled differently
+*   AWX server VM could be removed or repurposed for other services

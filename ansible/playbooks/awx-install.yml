@@ -12,7 +12,7 @@
           
           services:
             postgres:
-              image: postgres:13
+              image: postgres:12
               container_name: awx_postgres
               restart: unless-stopped
               environment:
@@ -24,23 +24,17 @@
                 - {{ postgres_data_dir }}:/var/lib/postgresql/data/pgdata:Z
               networks:
                 - awx
-              healthcheck:
-                test: ["CMD-SHELL", "pg_isready -U {{ postgres_user }}"]
-                interval: 10s
-                timeout: 5s
-                retries: 5
 
             awx_web:
-              image: ansible/awx:{{ awx_version }}
+              image: quay.io/ansible/awx:{{ awx_version }}
               container_name: awx_web
               restart: unless-stopped
               depends_on:
-                postgres:
-                  condition: service_healthy
+                - postgres
               ports:
                 - "{{ awx_port }}:8052"
-              hostname: awx
-              user: root
+              hostname: awxweb
+              user: "0"
               environment:
                 SECRET_KEY: awxsecret
                 DATABASE_USER: {{ postgres_user }}
@@ -52,21 +46,18 @@
                 AWX_ADMIN_PASSWORD: {{ awx_admin_password }}
               volumes:
                 - {{ awx_project_dir }}:/var/lib/awx/projects:z
-                - /var/run/docker.sock:/var/run/docker.sock
               networks:
                 - awx
 
             awx_task:
-              image: ansible/awx:{{ awx_version }}
+              image: quay.io/ansible/awx:{{ awx_version }}
               container_name: awx_task
               restart: unless-stopped
               depends_on:
-                postgres:
-                  condition: service_healthy
-                awx_web:
-                  condition: service_started
+                - postgres
+                - awx_web
               hostname: awx
-              user: root
+              user: "0"
               environment:
                 SECRET_KEY: awxsecret
                 DATABASE_USER: {{ postgres_user }}
@@ -78,7 +69,6 @@
                 AWX_ADMIN_PASSWORD: {{ awx_admin_password }}
               volumes:
                 - {{ awx_project_dir }}:/var/lib/awx/projects:z
-                - /var/run/docker.sock:/var/run/docker.sock
               networks:
                 - awx
               command: /usr/bin/launch_awx_task.sh
@@ -92,7 +82,7 @@
 
     - name: Pull AWX Docker images
       community.docker.docker_image:
-        name: "ansible/awx:{{ awx_version }}"
+        name: "quay.io/ansible/awx:{{ awx_version }}"
         source: pull
       tags: docker
 
@@ -103,10 +93,10 @@
       tags: docker
 
     - name: Start AWX containers
-      community.docker.docker_compose:
+      community.docker.docker_compose_v2:
         project_src: "{{ docker_compose_dir }}"
         state: present
-        pull: true
+        pull: always
       register: awx_compose_output
       tags: start
 

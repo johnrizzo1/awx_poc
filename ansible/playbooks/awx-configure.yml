@@ -12,14 +12,40 @@
     awx_credential_name: "SSH Credential"
 
   tasks:
-    - name: Generate SSH key pair for AWX
-      community.crypto.openssh_keypair:
+    - name: Ensure root .ssh directory exists
+      ansible.builtin.file:
+        path: /root/.ssh
+        state: directory
+        mode: '0700'
+      tags: ssh
+
+    - name: Check if AWX SSH key already exists
+      ansible.builtin.stat:
         path: /root/.ssh/awx_rsa
-        type: rsa
-        size: 4096
-        comment: "AWX SSH Key"
-        force: false
-      register: awx_ssh_key
+      register: awx_key_check
+      tags: ssh
+
+    - name: Generate SSH key pair for AWX
+      ansible.builtin.command:
+        cmd: ssh-keygen -t rsa -b 4096 -f /root/.ssh/awx_rsa -N '' -C 'AWX SSH Key'
+        creates: /root/.ssh/awx_rsa
+      when: not awx_key_check.stat.exists
+      tags: ssh
+
+    - name: Set correct permissions on private key
+      ansible.builtin.file:
+        path: /root/.ssh/awx_rsa
+        mode: '0600'
+        owner: root
+        group: root
+      tags: ssh
+
+    - name: Set correct permissions on public key
+      ansible.builtin.file:
+        path: /root/.ssh/awx_rsa.pub
+        mode: '0644'
+        owner: root
+        group: root
       tags: ssh
 
     - name: Read AWX public key

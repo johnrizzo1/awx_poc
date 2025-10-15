@@ -76,9 +76,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   end
 
   # Provision all VMs with Ansible after all are created
-  # This runs only once after the last VM is up
+  # Multiple provisioners run in sequence
   config.vm.define "client-centos", primary: false do |node|
-    node.vm.provision "ansible" do |ansible|
+    # Step 1: Setup prerequisites and clients
+    node.vm.provision "setup", type: "ansible" do |ansible|
       ansible.limit = "all"
       ansible.playbook = "ansible/playbooks/site.yml"
       ansible.inventory_path = "ansible/inventory/hosts.yml"
@@ -92,6 +93,31 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         "ubuntu" => ["client-ubuntu"],
         "centos" => ["client-centos"]
       }
+    end
+
+    # Step 2: Install AWX (DISABLED - AWX deployed in Kubernetes cluster)
+    # node.vm.provision "awx_install", type: "ansible" do |ansible|
+    #   ansible.limit = "awx_server"
+    #   ansible.playbook = "ansible/playbooks/awx-install.yml"
+    #   ansible.inventory_path = "ansible/inventory/hosts.yml"
+    #   ansible.verbose = "v"
+    # end
+
+    # Step 3: Configure AWX (DISABLED - AWX deployed in Kubernetes cluster)
+    # node.vm.provision "awx_configure", type: "ansible" do |ansible|
+    #   ansible.limit = "awx_server"
+    #   ansible.playbook = "ansible/playbooks/awx-configure.yml"
+    #   ansible.inventory_path = "ansible/inventory/hosts.yml"
+    #   ansible.verbose = "v"
+    # end
+
+    # Step 4: Distribute SSH keys
+    # Note: Keys generated on awx-server can be copied to Kubernetes AWX
+    node.vm.provision "distribute_keys", type: "ansible" do |ansible|
+      ansible.limit = "all"
+      ansible.playbook = "ansible/playbooks/distribute-awx-key.yml"
+      ansible.inventory_path = "ansible/inventory/hosts.yml"
+      ansible.verbose = "v"
     end
   end
 end

@@ -4,8 +4,8 @@
 # AWX Installation Method: docker-compose (simpler) or operator (k8s-based)
 awx_install_method: docker-compose
 
-# AWX Version
-awx_version: "24.6.1"
+# AWX Version (using 21.14.0 for docker-compose compatibility)
+awx_version: "21.14.0"
 awx_operator_version: "2.19.1"
 
 # AWX Admin Credentials

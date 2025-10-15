@@ -1,0 +1,35 @@
+---
+# Client Nodes Configuration Variables
+
+# Common packages to install on all clients
+common_packages:
+  - vim
+  - curl
+  - wget
+  - git
+  - net-tools
+  - htop
+
+# SSH Configuration
+ssh_allow_password_auth: false
+ssh_permit_root_login: false
+
+# Firewall Configuration
+enable_firewall: true
+
+# Time synchronization
+ntp_enabled: true
+ntp_timezone: "America/New_York"
+
+# User Configuration
+demo_user: demouser
+demo_user_password: "Demo123!"
+
+# Service Management Demo
+demo_services:
+  - name: httpd
+    state: started
+    enabled: true
+  - name: nginx
+    state: started
+    enabled: true

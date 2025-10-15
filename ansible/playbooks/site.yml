@@ -1,0 +1,318 @@
+---
+# Master playbook for AWX POC provisioning
+# This playbook orchestrates the complete setup of the AWX environment
+
+- name: Setup AWX Server Prerequisites
+  hosts: awx_server
+  become: true
+  gather_facts: true
+  tags: [awx, prerequisites]
+  
+  tasks:
+    - name: Update system packages
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: true
+
+    - name: Install required packages
+      ansible.builtin.dnf:
+        name:
+          - epel-release
+          - python3
+          - python3-pip
+          - git
+          - curl
+          - wget
+          - vim
+          - net-tools
+          - firewalld
+          - policycoreutils-python-utils
+        state: present
+
+    - name: Install Docker prerequisites
+      ansible.builtin.dnf:
+        name:
+          - yum-utils
+          - device-mapper-persistent-data
+          - lvm2
+        state: present
+
+    - name: Add Docker repository
+      ansible.builtin.command:
+        cmd: dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+        creates: /etc/yum.repos.d/docker-ce.repo
+
+    - name: Install Docker
+      ansible.builtin.dnf:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: Start and enable Docker service
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Add vagrant user to docker group
+      ansible.builtin.user:
+        name: vagrant
+        groups: docker
+        append: true
+
+    - name: Install Docker Compose standalone
+      ansible.builtin.get_url:
+        url: "https://github.com/docker/compose/releases/download/v{{ docker_compose_version }}/docker-compose-linux-x86_64"
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+
+    - name: Configure SELinux to permissive mode
+      ansible.posix.selinux:
+        policy: targeted
+        state: "{{ selinux_state }}"
+
+    - name: Start and enable firewalld
+      ansible.builtin.systemd:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Configure firewall for AWX
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop: "{{ firewall_ports }}"
+
+    - name: Create AWX directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      loop:
+        - "{{ docker_compose_dir }}"
+        - "{{ awx_project_dir }}"
+        - "{{ postgres_data_dir }}"
+
+    - name: Install Python Docker module
+      ansible.builtin.pip:
+        name:
+          - docker
+          - docker-compose
+        state: present
+
+    - name: Display AWX prerequisites completion
+      ansible.builtin.debug:
+        msg: "AWX server prerequisites installed successfully!"
+
+- name: Setup Client Nodes
+  hosts: clients
+  become: true
+  gather_facts: true
+  tags: [clients]
+  
+  tasks:
+    - name: Update package cache (RHEL family)
+      ansible.builtin.dnf:
+        update_cache: true
+      when: ansible_os_family == "RedHat"
+      retries: 3
+      delay: 10
+
+    - name: Update package cache (Debian family)
+      ansible.builtin.apt:
+        update_cache: true
+      when: ansible_os_family == "Debian"
+      retries: 3
+      delay: 10
+
+    - name: Install EPEL repository (RHEL family)
+      ansible.builtin.dnf:
+        name: epel-release
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Install common packages (RHEL family)
+      ansible.builtin.dnf:
+        name: "{{ common_packages }}"
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Install common packages (Debian family)
+      ansible.builtin.apt:
+        name: "{{ common_packages }}"
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Install Python3 and pip (RHEL family)
+      ansible.builtin.dnf:
+        name:
+          - python3
+          - python3-pip
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Install Python3 and pip (Debian family)
+      ansible.builtin.apt:
+        name:
+          - python3
+          - python3-pip
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Create demo user
+      ansible.builtin.user:
+        name: "{{ demo_user }}"
+        password: "{{ demo_user_password | password_hash('sha512') }}"
+        shell: /bin/bash
+        create_home: true
+        state: present
+
+    - name: Add demo user to sudoers
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers.d/{{ demo_user }}
+        line: "{{ demo_user }} ALL=(ALL) NOPASSWD: ALL"
+        create: true
+        mode: '0440'
+        validate: 'visudo -cf %s'
+
+    - name: Configure SSH to allow key-based authentication
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      loop:
+        - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+      notify: Restart SSH
+
+    - name: Ensure .ssh directory exists for vagrant user
+      ansible.builtin.file:
+        path: /home/vagrant/.ssh
+        state: directory
+        owner: vagrant
+        group: vagrant
+        mode: '0700'
+
+    - name: Ensure .ssh directory exists for demo user
+      ansible.builtin.file:
+        path: /home/{{ demo_user }}/.ssh
+        state: directory
+        owner: "{{ demo_user }}"
+        group: "{{ demo_user }}"
+        mode: '0700'
+
+    - name: Set hostname
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Add hostname to /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ ansible_host }} {{ inventory_hostname }}"
+        state: present
+
+    - name: Configure timezone
+      community.general.timezone:
+        name: "{{ ntp_timezone }}"
+
+    - name: Install and configure firewalld (RHEL family)
+      block:
+        - name: Install firewalld
+          ansible.builtin.dnf:
+            name: firewalld
+            state: present
+
+        - name: Start and enable firewalld
+          ansible.builtin.systemd:
+            name: firewalld
+            state: started
+            enabled: true
+
+        - name: Allow SSH through firewall
+          ansible.posix.firewalld:
+            service: ssh
+            permanent: true
+            state: enabled
+            immediate: true
+      when: ansible_os_family == "RedHat" and enable_firewall
+
+    - name: Configure UFW firewall (Debian family)
+      block:
+        - name: Install UFW
+          ansible.builtin.apt:
+            name: ufw
+            state: present
+
+        - name: Allow SSH through UFW
+          community.general.ufw:
+            rule: allow
+            port: '22'
+            proto: tcp
+
+        - name: Enable UFW
+          community.general.ufw:
+            state: enabled
+      when: ansible_os_family == "Debian" and enable_firewall
+
+    - name: Create test directory
+      ansible.builtin.file:
+        path: /opt/awx-demo
+        state: directory
+        mode: '0755'
+
+    - name: Create test file
+      ansible.builtin.copy:
+        content: |
+          This is a test file created by Ansible.
+          Hostname: {{ inventory_hostname }}
+          IP Address: {{ ansible_host }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+        dest: /opt/awx-demo/info.txt
+        mode: '0644'
+
+    - name: Display client configuration summary
+      ansible.builtin.debug:
+        msg:
+          - "Client {{ inventory_hostname }} configured successfully!"
+          - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "IP: {{ ansible_host }}"
+
+  handlers:
+    - name: Restart SSH
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted
+
+- name: Display Provisioning Summary
+  hosts: localhost
+  gather_facts: false
+  tags: [always]
+  
+  tasks:
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AWX POC Provisioning Complete!"
+          - "=========================================="
+          - ""
+          - "Next steps:"
+          - "1. Install AWX: ansible-playbook ansible/playbooks/awx-install.yml"
+          - "2. Configure AWX: ansible-playbook ansible/playbooks/awx-configure.yml"
+          - "3. Distribute SSH keys: ansible-playbook ansible/playbooks/distribute-awx-key.yml"
+          - ""
+          - "Or run all at once:"
+          - "ansible-playbook ansible/playbooks/awx-install.yml ansible/playbooks/awx-configure.yml ansible/playbooks/distribute-awx-key.yml"
+          - ""
+          - "AWX will be available at: http://192.168.56.10"

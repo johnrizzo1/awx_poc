@@ -1,0 +1,317 @@
+---
+- name: Configure AWX Initial Setup
+  hosts: awx_server
+  become: true
+  gather_facts: true
+
+  vars:
+    awx_api_url: "http://{{ awx_host }}:{{ awx_port }}/api/v2"
+    awx_organization: "Demo Organization"
+    awx_project_name: "Demo Project"
+    awx_inventory_name: "POC Inventory"
+    awx_credential_name: "SSH Credential"
+
+  tasks:
+    - name: Generate SSH key pair for AWX
+      community.crypto.openssh_keypair:
+        path: /root/.ssh/awx_rsa
+        type: rsa
+        size: 4096
+        comment: "AWX SSH Key"
+        force: false
+      register: awx_ssh_key
+      tags: ssh
+
+    - name: Read AWX public key
+      ansible.builtin.slurp:
+        src: /root/.ssh/awx_rsa.pub
+      register: awx_public_key
+      tags: ssh
+
+    - name: Read AWX private key
+      ansible.builtin.slurp:
+        src: /root/.ssh/awx_rsa
+      register: awx_private_key
+      tags: ssh
+
+    - name: Install awxkit for API interactions
+      ansible.builtin.pip:
+        name: awxkit
+        state: present
+      tags: awxkit
+
+    - name: Wait for AWX to be fully ready
+      ansible.builtin.uri:
+        url: "{{ awx_api_url }}/ping/"
+        method: GET
+        status_code: 200
+      register: awx_ready
+      until: awx_ready.status == 200
+      retries: 30
+      delay: 10
+      tags: verify
+
+    - name: Create AWX organization
+      ansible.builtin.uri:
+        url: "{{ awx_api_url }}/organizations/"
+        method: POST
+        user: "{{ awx_admin_user }}"
+        password: "{{ awx_admin_password }}"
+        body_format: json
+        body:
+          name: "{{ awx_organization }}"
+          description: "Demo organization for POC"
+        status_code: [201, 400]
+        force_basic_auth: true
+      register: org_result
+      tags: organization
+
+    - name: Get organization ID
+      ansible.builtin.uri:
+        url: "{{ awx_api_url }}/organizations/?name={{ awx_organization | urlencode }}"
+        method: GET
+        user: "{{ awx_admin_user }}"
+        password: "{{ awx_admin_password }}"
+        force_basic_auth: true
+      register: org_query
+      tags: organization
+
+    - name: Set organization ID fact
+      ansible.builtin.set_fact:
+        org_id: "{{ org_query.json.results[0].id }}"
+      tags: organization
+
+    - name: Create SSH credential
+      ansible.builtin.uri:
+        url: "{{ awx_api_url }}/credentials/"
+        method: POST
+        user: "{{ awx_admin_user }}"
+        password: "{{ awx_admin_password }}"
+        body_format: json
+        body:
+          name: "{{ awx_credential_name }}"
+          description: "SSH credential for managed nodes"
+          organization: "{{ org_id }}"
+          credential_type: 1
+          inputs:
+            username: vagrant
+            ssh_key_data: "{{ awx_private_key.content | b64decode }}"
+        status_code: [201, 400]
+        force_basic_auth: true
+      register: credential_result
+      tags: credentials
+
+    - name: Create inventory
+      ansible.builtin.uri:
+        url: "{{ awx_api_url }}/inventories/"
+        method: POST
+        user: "{{ awx_admin_user }}"
+        password: "{{ awx_admin_password }}"
+        body_format: json
+        body:
+          name: "{{ awx_inventory_name }}"
+          description: "Inventory for POC client nodes"
+          organization: "{{ org_id }}"
+        status_code: [201, 400]
+        force_basic_auth: true
+      register: inventory_result
+      tags: inventory
+
+    - name: Get inventory ID
+      ansible.builtin.uri:
+        url: "{{ awx_api_url }}/inventories/?name={{ awx_inventory_name | urlencode }}"
+        method: GET
+        user: "{{ awx_admin_user }}"
+        password: "{{ awx_admin_password }}"
+        force_basic_auth: true
+      register: inventory_query
+      tags: inventory
+
+    - name: Set inventory ID fact
+      ansible.builtin.set_fact:
+        inventory_id: "{{ inventory_query.json.results[0].id }}"
+      tags: inventory
+
+    - name: Create host groups in inventory
+      ansible.builtin.uri:
+        url: "{{ awx_api_url }}/inventories/{{ inventory_id }}/groups/"
+        method: POST
+        user: "{{ awx_admin_user }}"
+        password: "{{ awx_admin_password }}"
+        body_format: json
+        body:
+          name: "{{ item }}"
+          description: "{{ item }} hosts"
+          inventory: "{{ inventory_id }}"
+        status_code: [201, 400]
+        force_basic_auth: true
+      loop:
+        - rhel_family
+        - debian_family
+        - almalinux
+        - ubuntu
+        - centos
+      tags: inventory
+
+    - name: Add client hosts to inventory
+      ansible.builtin.uri:
+        url: "{{ awx_api_url }}/inventories/{{ inventory_id }}/hosts/"
+        method: POST
+        user: "{{ awx_admin_user }}"
+        password: "{{ awx_admin_password }}"
+        body_format: json
+        body:
+          name: "{{ item.name }}"
+          description: "{{ item.description }}"
+          inventory: "{{ inventory_id }}"
+          variables: "{{ item.variables | to_json }}"
+        status_code: [201, 400]
+        force_basic_auth: true
+      loop:
+        - name: client-alma
+          description: "AlmaLinux 9 client"
+          variables:
+            ansible_host: "192.168.56.11"
+        - name: client-ubuntu
+          description: "Ubuntu 22.04 client"
+          variables:
+            ansible_host: "192.168.56.12"
+        - name: client-centos
+          description: "CentOS Stream 9 client"
+          variables:
+            ansible_host: "192.168.56.13"
+      tags: inventory
+
+    - name: Create demo project directory
+      ansible.builtin.file:
+        path: "{{ awx_project_dir }}/demo-playbooks"
+        state: directory
+        mode: '0755'
+      tags: project
+
+    - name: Create demo playbook - System Update
+      ansible.builtin.copy:
+        content: |
+          ---
+          - name: System Update
+            hosts: all
+            become: true
+            tasks:
+              - name: Update packages (RHEL)
+                ansible.builtin.dnf:
+                  name: "*"
+                  state: latest
+                when: ansible_os_family == "RedHat"
+              
+              - name: Update packages (Debian)
+                ansible.builtin.apt:
+                  upgrade: dist
+                  update_cache: true
+                when: ansible_os_family == "Debian"
+        dest: "{{ awx_project_dir }}/demo-playbooks/system-update.yml"
+        mode: '0644'
+      tags: project
+
+    - name: Create demo playbook - Install Package
+      ansible.builtin.copy:
+        content: |
+          ---
+          - name: Install Package
+            hosts: all
+            become: true
+            tasks:
+              - name: Install package (RHEL)
+                ansible.builtin.dnf:
+                  name: "{{ package_name }}"
+                  state: present
+                when: ansible_os_family == "RedHat"
+              
+              - name: Install package (Debian)
+                ansible.builtin.apt:
+                  name: "{{ package_name }}"
+                  state: present
+                  update_cache: true
+                when: ansible_os_family == "Debian"
+        dest: "{{ awx_project_dir }}/demo-playbooks/install-package.yml"
+        mode: '0644'
+      tags: project
+
+    - name: Create demo playbook - Service Management
+      ansible.builtin.copy:
+        content: |
+          ---
+          - name: Manage Service
+            hosts: all
+            become: true
+            tasks:
+              - name: Manage service state
+                ansible.builtin.systemd:
+                  name: "{{ service_name }}"
+                  state: "{{ service_state }}"
+                  enabled: "{{ service_enabled | default(true) }}"
+        dest: "{{ awx_project_dir }}/demo-playbooks/manage-service.yml"
+        mode: '0644'
+      tags: project
+
+    - name: Create demo playbook - File Deployment
+      ansible.builtin.copy:
+        content: |
+          ---
+          - name: Deploy File
+            hosts: all
+            become: true
+            tasks:
+              - name: Create directory
+                ansible.builtin.file:
+                  path: "{{ file_path | dirname }}"
+                  state: directory
+                  mode: '0755'
+              
+              - name: Deploy file
+                ansible.builtin.copy:
+                  content: "{{ file_content }}"
+                  dest: "{{ file_path }}"
+                  mode: '0644'
+        dest: "{{ awx_project_dir }}/demo-playbooks/deploy-file.yml"
+        mode: '0644'
+      tags: project
+
+    - name: Create demo playbook - Gather Facts
+      ansible.builtin.copy:
+        content: |
+          ---
+          - name: Gather System Facts
+            hosts: all
+            gather_facts: true
+            tasks:
+              - name: Display system information
+                ansible.builtin.debug:
+                  msg:
+                    - "Hostname: {{ ansible_hostname }}"
+                    - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+                    - "Kernel: {{ ansible_kernel }}"
+                    - "Architecture: {{ ansible_architecture }}"
+                    - "Memory: {{ ansible_memtotal_mb }} MB"
+                    - "CPUs: {{ ansible_processor_vcpus }}"
+        dest: "{{ awx_project_dir }}/demo-playbooks/gather-facts.yml"
+        mode: '0644'
+      tags: project
+
+    - name: Display AWX configuration summary
+      ansible.builtin.debug:
+        msg:
+          - "AWX configuration completed!"
+          - "Organization: {{ awx_organization }}"
+          - "Inventory: {{ awx_inventory_name }}"
+          - "Credential: {{ awx_credential_name }}"
+          - ""
+          - "Next steps:"
+          - "1. Access AWX UI at http://{{ awx_host }}:{{ awx_port }}"
+          - "2. Login with username: {{ awx_admin_user }}"
+          - "3. Create projects pointing to {{ awx_project_dir }}/demo-playbooks"
+          - "4. Create job templates using the demo playbooks"
+          - "5. Distribute the AWX public key to client nodes"
+          - ""
+          - "AWX Public Key (add to client nodes):"
+          - "{{ awx_public_key.content | b64decode }}"
+      tags: always

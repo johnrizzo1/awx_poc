@@ -1,0 +1,40 @@
+---
+# AWX Server Configuration Variables
+
+# AWX Installation Method: docker-compose (simpler) or operator (k8s-based)
+awx_install_method: docker-compose
+
+# AWX Version
+awx_version: "24.6.1"
+awx_operator_version: "2.19.1"
+
+# AWX Admin Credentials
+awx_admin_user: admin
+awx_admin_password: "AWXadmin123!"
+awx_admin_email: "admin@awx.local"
+
+# PostgreSQL Configuration
+postgres_data_dir: /var/lib/awx/pgdocker
+postgres_password: "AWXpostgres123!"
+postgres_user: awx
+postgres_db: awx
+
+# AWX Project Directory
+awx_project_dir: /var/lib/awx/projects
+
+# Network Configuration
+awx_host: "{{ ansible_host }}"
+awx_port: 80
+
+# Docker Compose Configuration
+docker_compose_dir: /opt/awx
+docker_compose_version: "2.23.0"
+
+# Firewall Ports
+firewall_ports:
+  - 80/tcp
+  - 443/tcp
+  - 5432/tcp
+
+# SELinux Configuration
+selinux_state: permissive  # For POC purposes; use enforcing in production

@@ -1,0 +1,193 @@
+---
+- name: Configure Client Nodes
+  hosts: clients
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Update system packages (RHEL family)
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: true
+      when: ansible_os_family == "RedHat"
+      tags: update
+
+    - name: Update system packages (Debian family)
+      ansible.builtin.apt:
+        upgrade: dist
+        update_cache: true
+      when: ansible_os_family == "Debian"
+      tags: update
+
+    - name: Install common packages (RHEL family)
+      ansible.builtin.dnf:
+        name: "{{ common_packages }}"
+        state: present
+      when: ansible_os_family == "RedHat"
+      tags: packages
+
+    - name: Install common packages (Debian family)
+      ansible.builtin.apt:
+        name: "{{ common_packages }}"
+        state: present
+      when: ansible_os_family == "Debian"
+      tags: packages
+
+    - name: Install Python3 and pip (RHEL family)
+      ansible.builtin.dnf:
+        name:
+          - python3
+          - python3-pip
+        state: present
+      when: ansible_os_family == "RedHat"
+      tags: python
+
+    - name: Install Python3 and pip (Debian family)
+      ansible.builtin.apt:
+        name:
+          - python3
+          - python3-pip
+        state: present
+      when: ansible_os_family == "Debian"
+      tags: python
+
+    - name: Create demo user
+      ansible.builtin.user:
+        name: "{{ demo_user }}"
+        password: "{{ demo_user_password | password_hash('sha512') }}"
+        shell: /bin/bash
+        create_home: true
+        state: present
+      tags: users
+
+    - name: Add demo user to sudoers
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers.d/{{ demo_user }}
+        line: "{{ demo_user }} ALL=(ALL) NOPASSWD: ALL"
+        create: true
+        mode: '0440'
+        validate: 'visudo -cf %s'
+      tags: users
+
+    - name: Configure SSH to allow key-based authentication
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      loop:
+        - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+      notify: Restart SSH
+      tags: ssh
+
+    - name: Ensure .ssh directory exists for vagrant user
+      ansible.builtin.file:
+        path: /home/vagrant/.ssh
+        state: directory
+        owner: vagrant
+        group: vagrant
+        mode: '0700'
+      tags: ssh
+
+    - name: Ensure .ssh directory exists for demo user
+      ansible.builtin.file:
+        path: /home/{{ demo_user }}/.ssh
+        state: directory
+        owner: "{{ demo_user }}"
+        group: "{{ demo_user }}"
+        mode: '0700'
+      tags: ssh
+
+    - name: Set hostname
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+      tags: hostname
+
+    - name: Add hostname to /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ ansible_host }} {{ inventory_hostname }}"
+        state: present
+      tags: hostname
+
+    - name: Configure timezone
+      community.general.timezone:
+        name: "{{ ntp_timezone }}"
+      tags: timezone
+
+    - name: Install and configure firewalld (RHEL family)
+      block:
+        - name: Install firewalld
+          ansible.builtin.dnf:
+            name: firewalld
+            state: present
+
+        - name: Start and enable firewalld
+          ansible.builtin.systemd:
+            name: firewalld
+            state: started
+            enabled: true
+
+        - name: Allow SSH through firewall
+          ansible.posix.firewalld:
+            service: ssh
+            permanent: true
+            state: enabled
+            immediate: true
+      when: ansible_os_family == "RedHat" and enable_firewall
+      tags: firewall
+
+    - name: Configure UFW firewall (Debian family)
+      block:
+        - name: Install UFW
+          ansible.builtin.apt:
+            name: ufw
+            state: present
+
+        - name: Allow SSH through UFW
+          community.general.ufw:
+            rule: allow
+            port: '22'
+            proto: tcp
+
+        - name: Enable UFW
+          community.general.ufw:
+            state: enabled
+      when: ansible_os_family == "Debian" and enable_firewall
+      tags: firewall
+
+    - name: Create test directory
+      ansible.builtin.file:
+        path: /opt/awx-demo
+        state: directory
+        mode: '0755'
+      tags: demo
+
+    - name: Create test file
+      ansible.builtin.copy:
+        content: |
+          This is a test file created by Ansible.
+          Hostname: {{ inventory_hostname }}
+          IP Address: {{ ansible_host }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+        dest: /opt/awx-demo/info.txt
+        mode: '0644'
+      tags: demo
+
+    - name: Display client configuration summary
+      ansible.builtin.debug:
+        msg:
+          - "Client {{ inventory_hostname }} configured successfully!"
+          - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "IP: {{ ansible_host }}"
+          - "Python: {{ ansible_python_version }}"
+      tags: always
+
+  handlers:
+    - name: Restart SSH
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted

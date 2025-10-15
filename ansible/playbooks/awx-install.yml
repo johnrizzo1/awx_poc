@@ -1,0 +1,201 @@
+---
+- name: Install AWX using Docker Compose
+  hosts: awx_server
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Create Docker Compose file for AWX
+      ansible.builtin.copy:
+        content: |
+          version: '3.8'
+          
+          services:
+            postgres:
+              image: postgres:13
+              container_name: awx_postgres
+              restart: unless-stopped
+              environment:
+                POSTGRES_DB: {{ postgres_db }}
+                POSTGRES_USER: {{ postgres_user }}
+                POSTGRES_PASSWORD: {{ postgres_password }}
+                PGDATA: /var/lib/postgresql/data/pgdata
+              volumes:
+                - {{ postgres_data_dir }}:/var/lib/postgresql/data/pgdata:Z
+              networks:
+                - awx
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U {{ postgres_user }}"]
+                interval: 10s
+                timeout: 5s
+                retries: 5
+
+            awx_web:
+              image: ansible/awx:{{ awx_version }}
+              container_name: awx_web
+              restart: unless-stopped
+              depends_on:
+                postgres:
+                  condition: service_healthy
+              ports:
+                - "{{ awx_port }}:8052"
+              hostname: awx
+              user: root
+              environment:
+                SECRET_KEY: awxsecret
+                DATABASE_USER: {{ postgres_user }}
+                DATABASE_PASSWORD: {{ postgres_password }}
+                DATABASE_NAME: {{ postgres_db }}
+                DATABASE_PORT: 5432
+                DATABASE_HOST: postgres
+                AWX_ADMIN_USER: {{ awx_admin_user }}
+                AWX_ADMIN_PASSWORD: {{ awx_admin_password }}
+              volumes:
+                - {{ awx_project_dir }}:/var/lib/awx/projects:z
+                - /var/run/docker.sock:/var/run/docker.sock
+              networks:
+                - awx
+
+            awx_task:
+              image: ansible/awx:{{ awx_version }}
+              container_name: awx_task
+              restart: unless-stopped
+              depends_on:
+                postgres:
+                  condition: service_healthy
+                awx_web:
+                  condition: service_started
+              hostname: awx
+              user: root
+              environment:
+                SECRET_KEY: awxsecret
+                DATABASE_USER: {{ postgres_user }}
+                DATABASE_PASSWORD: {{ postgres_password }}
+                DATABASE_NAME: {{ postgres_db }}
+                DATABASE_PORT: 5432
+                DATABASE_HOST: postgres
+                AWX_ADMIN_USER: {{ awx_admin_user }}
+                AWX_ADMIN_PASSWORD: {{ awx_admin_password }}
+              volumes:
+                - {{ awx_project_dir }}:/var/lib/awx/projects:z
+                - /var/run/docker.sock:/var/run/docker.sock
+              networks:
+                - awx
+              command: /usr/bin/launch_awx_task.sh
+
+          networks:
+            awx:
+              driver: bridge
+        dest: "{{ docker_compose_dir }}/docker-compose.yml"
+        mode: '0644'
+      tags: compose
+
+    - name: Pull AWX Docker images
+      community.docker.docker_image:
+        name: "ansible/awx:{{ awx_version }}"
+        source: pull
+      tags: docker
+
+    - name: Pull PostgreSQL Docker image
+      community.docker.docker_image:
+        name: "postgres:13"
+        source: pull
+      tags: docker
+
+    - name: Start AWX containers
+      community.docker.docker_compose:
+        project_src: "{{ docker_compose_dir }}"
+        state: present
+        pull: true
+      register: awx_compose_output
+      tags: start
+
+    - name: Wait for AWX web service to be ready
+      ansible.builtin.uri:
+        url: "http://{{ awx_host }}:{{ awx_port }}/api/v2/ping/"
+        method: GET
+        status_code: 200
+      register: awx_ping
+      until: awx_ping.status == 200
+      retries: 30
+      delay: 10
+      tags: verify
+
+    - name: Display AWX access information
+      ansible.builtin.debug:
+        msg:
+          - "AWX installation completed successfully!"
+          - "Access AWX at: http://{{ awx_host }}:{{ awx_port }}"
+          - "Username: {{ awx_admin_user }}"
+          - "Password: {{ awx_admin_password }}"
+          - ""
+          - "Note: It may take a few minutes for AWX to fully initialize."
+          - "Check container logs with: docker-compose -f {{ docker_compose_dir }}/docker-compose.yml logs -f"
+      tags: always
+
+    - name: Create systemd service for AWX
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=AWX Docker Compose Service
+          Requires=docker.service
+          After=docker.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          WorkingDirectory={{ docker_compose_dir }}
+          ExecStart=/usr/local/bin/docker-compose up -d
+          ExecStop=/usr/local/bin/docker-compose down
+          TimeoutStartSec=0
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/awx.service
+        mode: '0644'
+      tags: systemd
+
+    - name: Enable AWX systemd service
+      ansible.builtin.systemd:
+        name: awx
+        enabled: true
+        daemon_reload: true
+      tags: systemd
+
+    - name: Create AWX management script
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          # AWX Management Script
+          
+          COMPOSE_DIR="{{ docker_compose_dir }}"
+          
+          case "$1" in
+            start)
+              echo "Starting AWX..."
+              cd $COMPOSE_DIR && docker-compose up -d
+              ;;
+            stop)
+              echo "Stopping AWX..."
+              cd $COMPOSE_DIR && docker-compose down
+              ;;
+            restart)
+              echo "Restarting AWX..."
+              cd $COMPOSE_DIR && docker-compose restart
+              ;;
+            status)
+              echo "AWX Status:"
+              cd $COMPOSE_DIR && docker-compose ps
+              ;;
+            logs)
+              echo "AWX Logs:"
+              cd $COMPOSE_DIR && docker-compose logs -f
+              ;;
+            *)
+              echo "Usage: $0 {start|stop|restart|status|logs}"
+              exit 1
+              ;;
+          esac
+        dest: /usr/local/bin/awx-manage
+        mode: '0755'
+      tags: scripts

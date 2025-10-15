@@ -1,0 +1,62 @@
+# Vagrant
+.vagrant/
+*.box
+
+# Ansible
+*.retry
+ansible/inventory/group_vars/vault.yml
+ansible/inventory/host_vars/vault.yml
+.ansible/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# SSH Keys (except example)
+*.pem
+*.key
+id_rsa*
+!id_rsa.pub.example
+
+# Sensitive data
+secrets/
+credentials/
+*.secret
+
+# OS
+Thumbs.db
+.DS_Store
+
+# AWX specific
+awx-data/
+postgres-data/
+
+# Backup files
+*.bak
+*.backup

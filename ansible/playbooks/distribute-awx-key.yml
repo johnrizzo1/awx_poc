@@ -1,0 +1,83 @@
+---
+- name: Distribute AWX SSH Key to Client Nodes
+  hosts: clients
+  become: true
+  gather_facts: true
+
+  vars:
+    awx_server_ip: "192.168.56.10"
+
+  tasks:
+    - name: Fetch AWX public key from AWX server
+      ansible.builtin.slurp:
+        src: /root/.ssh/awx_rsa.pub
+      register: awx_pub_key
+      delegate_to: awx-server
+      run_once: true
+      tags: fetch
+
+    - name: Ensure .ssh directory exists for vagrant user
+      ansible.builtin.file:
+        path: /home/vagrant/.ssh
+        state: directory
+        owner: vagrant
+        group: vagrant
+        mode: '0700'
+      tags: ssh
+
+    - name: Add AWX public key to vagrant authorized_keys
+      ansible.builtin.authorized_key:
+        user: vagrant
+        key: "{{ awx_pub_key.content | b64decode }}"
+        state: present
+        comment: "AWX Server Key"
+      tags: ssh
+
+    - name: Ensure .ssh directory exists for demo user
+      ansible.builtin.file:
+        path: /home/{{ demo_user }}/.ssh
+        state: directory
+        owner: "{{ demo_user }}"
+        group: "{{ demo_user }}"
+        mode: '0700'
+      tags: ssh
+
+    - name: Add AWX public key to demo user authorized_keys
+      ansible.builtin.authorized_key:
+        user: "{{ demo_user }}"
+        key: "{{ awx_pub_key.content | b64decode }}"
+        state: present
+        comment: "AWX Server Key"
+      tags: ssh
+
+    - name: Test SSH connection from AWX server
+      ansible.builtin.command:
+        cmd: ssh -o StrictHostKeyChecking=no -i /root/.ssh/awx_rsa vagrant@{{ ansible_host }} echo "Connection successful"
+      delegate_to: awx-server
+      register: ssh_test
+      changed_when: false
+      tags: test
+
+    - name: Display SSH test result
+      ansible.builtin.debug:
+        msg: "SSH connection to {{ inventory_hostname }}: {{ ssh_test.stdout }}"
+      tags: test
+
+    - name: Create AWX connection info file
+      ansible.builtin.copy:
+        content: |
+          AWX Server Connection Information
+          ==================================
+          
+          AWX Server IP: {{ awx_server_ip }}
+          Client Node: {{ inventory_hostname }}
+          Client IP: {{ ansible_host }}
+          
+          SSH Key has been distributed successfully.
+          AWX can now manage this node.
+          
+          Test connection from AWX server:
+          ssh -i /root/.ssh/awx_rsa vagrant@{{ ansible_host }}
+        dest: /opt/awx-demo/connection-info.txt
+        mode: '0644'
+      tags: info

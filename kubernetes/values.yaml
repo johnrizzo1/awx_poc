@@ -1,0 +1,3 @@
+AWX:
+  enabled: true
+  name: awx
